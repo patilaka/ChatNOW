@@ -1,0 +1,428 @@
+Product Requirement Document (PRD)
+Project: ChatWave – Anonymous Encrypted Group Chat (PWA)
+Version: 1.0
+Date: 2026-07-11
+
+1. Introduction
+1.1 Purpose
+ChatWave is a zero‑login, real‑time group chat progressive web application (PWA). Users identify themselves with a freely chosen display name, then join or create ephemeral chat rooms using a 4‑digit code. All messages are encrypted client‑side so that not even the server can read them. The app works entirely on the free tiers of Firebase (Firestore, Cloud Functions, FCM), can be installed on the home screen, and supports web push notifications that deep‑link into a specific chat.
+
+1.2 Goals
+No authentication – frictionless entry; only a display name is required.
+
+Instant group chat – join any room by typing its 4‑digit code.
+
+End‑to‑end‑like encryption – messages are encrypted/decrypted in the browser using a key derived from the room code (server‑side blind).
+
+Persistent history – all previous messages in a room are visible to every member.
+
+Push notifications – notify all room members when a new message arrives (free‑tier Firebase FCM).
+
+Installable PWA – add to home screen, launch in standalone mode.
+
+Pure black, minimalist UI – chat‑GPT‑style input bar, dark aesthetic.
+
+1.3 Target Audience
+Friends, families, or teams who need a quick throw‑away group chat without account creation.
+
+Privacy‑conscious users who want chat contents hidden from the service provider.
+
+Users who prefer a dark, distraction‑free interface.
+
+2. Core Features
+Feature	Description
+Name registration	First visit: modal asks for display name. Stored in local DB (IndexedDB) and Firebase Firestore.
+Room access by 4‑digit code	4‑box input for entering a room code; “Join” and “Create” buttons.
+Encrypted messaging	Messages encrypted with AES‑256‑GCM using a key derived from the room code. Ciphertext stored in Firestore.
+Real‑time updates	Firestore real‑time listeners update the chat view instantly.
+Message history	All messages in a room are loaded (decrypted) when entering, infinite scroll.
+Push notifications	When a message is sent, other room members receive a web push notification. Tapping opens the room directly.
+Room list	Previously joined rooms shown on dashboard (stored locally). Tap to re‑enter.
+PWA install	Manifest + service worker; “Add to Home Screen” prompt.
+Pure black UI	#000000 backgrounds, white/grey text, minimal input area (like ChatGPT).
+3. User Flow & Functional Requirements
+3.1 First‑Time Visit Flow
+User opens the app URL.
+
+App checks local IndexedDB for a userProfile document (name, uid).
+
+If none exists → show a centered modal/popup:
+
+Title: “Welcome! Choose your display name”
+
+Text input (auto‑focus)
+
+“Continue” button (disabled until name ≥2 characters)
+
+On submission:
+
+Generate a unique uid (e.g., crypto.randomUUID()).
+
+Save { uid, name, createdAt } locally (IndexedDB).
+
+Write same record to Firestore collection users/{uid}.
+
+Close modal, proceed to Dashboard.
+
+3.2 Returning User Flow
+If local userProfile exists, skip the name modal, go directly to Dashboard.
+
+3.3 Dashboard Screen
+Components (pure black background):
+
+Top: “ChatWave” logo / title.
+
+Middle: 4 large bordered boxes (OTP‑style) for entering a room code.
+
+Digits entered sequentially; auto‑focus moves to next box; backspace moves to previous.
+
+Below the boxes: two buttons:
+
+Join – disabled until 4 digits are entered.
+
+Create – always enabled.
+
+Bottom: “Your chats” section (only visible if local DB contains joined rooms).
+
+Each item shows:
+
+Room code (e.g., “#1234”)
+
+Last message preview (decrypted, max 40 chars) or “No messages yet”
+
+Timestamp
+
+Unread badge (if any)
+
+Tapping a chat navigates to the Chat Screen.
+
+Actions:
+
+Join button:
+
+Check if the code exists as a roomId in Firestore collection rooms.
+
+If yes → add room to local joined‑rooms list (IndexedDB) if not already there, then navigate to Chat Screen.
+
+If no → show error “Room not found”.
+
+Create button:
+
+Generate a random 4‑digit code (1000‑9999) that doesn’t yet exist in rooms.
+
+Create a new room document: rooms/{code} with { createdAt }.
+
+Add room to local joined list, then navigate to Chat Screen.
+
+3.4 Chat Screen
+Layout:
+
+Header: Room code (e.g., “Chat #1234”) + member count (optional) + leave/back button.
+
+Message list: Chat bubbles, pure black background, white/grey bubbles for others, coloured bubble for own messages (user’s name above bubbles, timestamp).
+
+Input area (fixed to bottom):
+
+Single‑line text field, rounded dark grey rectangle, placeholder “Message”.
+
+Send icon (paper plane) on the right.
+
+Emoji button? (future scope).
+
+Functionality:
+
+On enter, load all messages from rooms/{code}/messages (ordered by timestamp).
+
+Decrypt each message body with the room’s derived encryption key (see §5).
+
+Real‑time listener on new messages appends them decrypted.
+
+Sending a message:
+
+Encrypt plaintext (AES‑256‑GCM) using the derived key.
+Write document to rooms/{code}/messages/{autoId}:
+senderUid
+senderName
+ciphertext
+iv (initialization vector)
+timestamp (server timestamp)
+Clear input box.
+Infinite scroll upwards for older messages (paginate with limit, startAfter).
+
+3.5 Notifications
+Each device registers a web push token (using FCM) and stores it in Firestore:
+
+users/{uid}/tokens/{tokenId} with { token, platform, lastUsed }.
+
+Cloud Function trigger onCreate on rooms/{code}/messages:
+
+For each member of the room (who has a token), send an FCM message except the sender (filter by senderUid).
+
+FCM payload includes roomCode as data so that clicking the notification opens /chat/{code}.
+
+The service worker notificationclick event navigates to the appropriate chat route.
+
+Cost optimisation (Firebase Spark plan):
+
+Cloud Functions invocations: 125K/month. Monitor usage; a single new message triggers N notifications (N = members‑1). Keep rooms small.
+
+Alternative: Use a third‑party push service (OneSignal free tier) but prefer FCM for simplicity.
+
+3.6 PWA & Add to Home Screen
+manifest.json with display: standalone, pure black background_color and theme_color.
+
+Service worker that caches app shell for offline shell (not messages).
+
+Show “Add to Home Screen” prompt (beforeinstallprompt event) when appropriate.
+
+4. Non‑Functional Requirements
+4.1 Performance
+First meaningful paint < 2s.
+
+Message list lazy loading with virtualised scrolling for large rooms.
+
+Firestore real‑time snapshots limited to latest 50 messages, paginate older ones on demand.
+
+4.2 Security & Encryption
+4.2.1 Threat Model
+Firestore database is accessible only via configured Security Rules.
+
+Messages stored as ciphertext; Firebase/Google admins cannot read content.
+
+Room code is the only secret; anyone who knows the code can decrypt all messages (shared secret model).
+
+The 4‑digit space (1000‑9999) is brute‑forceable (9000 possibilities). This is acknowledged; a future version may add a separate room password.
+
+4.2.2 Encryption Scheme
+Key derivation: key = PBKDF2(roomCode, salt, iterations, 256 bits)
+
+Salt: a fixed application‑wide constant (e.g., “chatwave‑salt‑2026”) – not secret, but prevents rainbow tables for the 4‑digit codes.
+
+Iterations: 100,000 (tuned for client performance).
+
+Encryption: AES‑256‑GCM.
+
+Each message gets a random 12‑byte IV.
+
+ciphertext = encrypt(plaintext, key, iv)
+
+Store { ciphertext, iv }.
+
+Decryption: retrieve ciphertext and iv, decrypt with same derived key.
+
+Keys are computed once when entering a room and held in memory (never persisted to disk except the room code itself).
+
+4.3 Reliability & Offline Behaviour
+The app shell works offline (cached). Real‑time messages require connectivity.
+
+Message send fails gracefully if offline (can be queued later – future scope).
+
+5. Data Model (Firestore)
+5.1 users/{uid}
+json
+{
+  "name": "Alice",
+  "createdAt": "<timestamp>",
+  "lastSeen": "<timestamp>"
+}
+5.2 rooms/{code}
+json
+{
+  "createdAt": "<timestamp>",
+  "createdBy": "<uid>"
+}
+5.3 rooms/{code}/messages/{messageId}
+json
+{
+  "senderUid": "<uid>",
+  "senderName": "Alice",
+  "ciphertext": "<base64>",
+  "iv": "<base64 12-byte>",
+  "timestamp": "<serverTimestamp>"
+}
+5.4 users/{uid}/tokens/{tokenId}
+json
+{
+  "token": "<fcm_token>",
+  "platform": "web",
+  "createdAt": "<timestamp>"
+}
+Local Storage (IndexedDB):
+
+userProfile: { uid, name }
+
+joinedRooms: array of { code, joinedAt, lastReadTimestamp } (for unread tracking)
+
+6. Notification Architecture
+Token Registration:
+
+On app load after name set, request notification permission.
+
+Get FCM token using Firebase SDK, store in users/{uid}/tokens.
+
+Trigger: Cloud Function onNewMessage (Firestore onCreate trigger on rooms/{code}/messages).
+
+Determine recipients:
+
+Fetch all users who have an entry in a hypothetical rooms/{code}/members collection?
+Problem: We don’t store room membership explicitly. Members are only tracked locally.
+Solution: Add a rooms/{code}/members subcollection:
+
+members/{uid} with { joinedAt } (written when a user first joins the room).
+
+The Cloud Function queries this subcollection to get all member UIDs.
+
+Send Notification:
+
+For each member UID ≠ senderUid, retrieve their FCM tokens from users/{uid}/tokens.
+
+Send multicast message via Firebase Admin SDK.
+
+Payload: { data: { roomCode: "1234", type: "new_message" }, notification: { title: "New message in #1234", body: "Alice: ..." } }.
+
+(Note: plaintext body can be a generic “New message” to avoid leaking content in notification; better privacy.)
+
+Service Worker:
+
+notificationclick event handler: open URL https://example.com/chat?code=1234.
+
+Alternative to avoid Cloud Functions (if costs become an issue):
+
+Use a polling mechanism where the service worker periodically checks for badge updates, but that defeats real‑time push. Free FCM with Cloud Functions is recommended.
+
+7. UI/UX Design Guidelines
+7.1 Colour Palette
+Background: #000000 (pure black)
+
+Surface / cards: #0D0D0D or #1A1A1A with subtle border #333
+
+Primary text: #FFFFFF
+
+Secondary text: #B3B3B3
+
+Accent (buttons, own message bubble): #007AFF (Apple blue) or a custom neon accent #00FF88 to stand out on black – but designer can decide.
+
+Input bar: #1C1C1E, border #2C2C2E, text white.
+
+7.2 Typography
+System fonts (San Francisco / Roboto) for native feel.
+
+Size: 16px body, 14px timestamps, 20px headers.
+
+7.3 Dashboard
+OTP boxes: 48px x 48px, 2px grey border, 8px corner radius, spacing 12px.
+
+“Join” button: full width, rounded, accent colour.
+
+“Create” button: outlined style.
+
+Room list items: dark card with subtle border, room code bold, preview text below.
+
+7.4 Chat Screen
+Message bubbles: sent messages right‑aligned, coloured; received messages left‑aligned, dark grey.
+
+Input bar: rounded pill, minimum height 48px, max 120px (expandable), send button inside.
+
+Empty state: “No messages yet. Say hello!”
+
+7.5 Responsiveness
+Mobile‑first design. Maximum content width 768px on desktop, centred.
+
+8. Technical Stack (Recommended)
+Frontend: React (Next.js or Vite PWA) + Tailwind CSS
+
+State management: React Context + useReducer or Zustand.
+
+PWA: next-pwa or Vite‑PWA plugin.
+
+Backend/Database: Firebase
+
+Firestore (database)
+
+Firebase Cloud Messaging (push)
+
+Firebase Cloud Functions (Node.js 20) for notification trigger
+
+Encryption: Web Crypto API (subtle crypto) – PBKDF2, AES‑GCM.
+
+Local DB: idb (IndexedDB wrapper) or Dexie.js.
+
+Hosting: Firebase Hosting (free tier) or Vercel.
+
+9. Limitations & Assumptions
+Room code strength: 4 digits = 9,000 possible rooms. Sufficient for small‑scale use, but can be brute‑forced. This is a known trade‑off for simplicity.
+
+Encryption key based on room code: Anyone knowing the code can derive the key and read history. Forward secrecy is not provided.
+
+No member management: Anyone with the code can join; no kick/ban features. Any member can see all history.
+
+Cloud Functions Spark plan limits: 125K invocations/month. If each message triggers N notifications, with N=10 average, 12,500 messages/month possible. Monitor and upgrade if needed.
+
+Notifications require permission: Users must grant notification permission for push to work.
+
+No offline message queuing: Messages sent while offline are lost; future enhancement.
+
+10. Future Enhancements
+Custom room passwords in addition to 4‑digit code for stronger encryption.
+
+Message reactions, image/file sharing (encrypted blobs in Cloud Storage).
+
+Typing indicators, read receipts.
+
+Multiple devices sync (linked via optional passphrase).
+
+Room administration (owner, remove members).
+
+Spam/abuse reporting.
+
+11. Appendix: Wireframe Sketches (Textual)
+Dashboard
+
+text
++-----------------------------------+
+|           ChatWave               |
++-----------------------------------+
+|                                   |
+|   [1] [2] [3] [4]   (OTP boxes)  |
+|                                   |
+|    [  Join  ]  [ + Create ]       |
+|                                   |
+|-----------------------------------|
+|  Your Chats:                      |
+|  +-----------------------------+  |
+|  | # 4 5 2 1   "Hey everyone"  |  |
+|  |          2 min ago          |  |
+|  +-----------------------------+  |
+|  +-----------------------------+  |
+|  | # 1 0 0 7   "See you soon" |  |
+|  |          1 hour ago         |  |
+|  +-----------------------------+  |
++-----------------------------------+
+Chat Screen
+
+text
++-----------------------------------+
+|  < Back   Chat #4521      (3)    |
++-----------------------------------+
+|                                   |
+|  [10:02] Alice                    |
+|  ┌──────────────────────┐         |
+|  │ Hello everyone!      │ (grey)  |
+|  └──────────────────────┘         |
+|                                   |
+|                    [10:03] You    |
+|               ┌──────────────────┐|
+|               │ Hi Alice!   (blue)||
+|               └──────────────────┘|
+|                                   |
+|  [10:04] Bob                      |
+|  ┌──────────────────────┐         |
+|  │ Joining the party!  │         |
+|  └──────────────────────┘         |
+|                                   |
+|  ─────────────────────────────────|
+|  |  Message...              [→]  |  <-- input bar
++-----------------------------------+
+Document Endorsement
+Prepared for development handoff. All flows, security considerations, and UI guidelines are captured.
+Next step: technical design document and sprint planning.

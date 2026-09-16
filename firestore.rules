@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Rooms are secret: only those who know the 4-digit code can access.
+    // Enumeration is blocked (list: false) — you must know the code to get the doc.
+    match /rooms/{roomCode} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if roomCode.matches('^[0-9]{4}$')
+        && request.resource.data.keys().hasAll(['name','createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() < 50;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['name','lastActivityAt','slowModeSec','blockedWords','blurWords','effectWords','frozen','keyVersion','autoDelete','pinned','createdBy','createdAt']);
+
+      match /messages/{msgId} {
+        allow read: if true;
+        allow create: if request.resource.data.keys().hasAll(['senderUid','senderName','ciphertext','iv','timestamp','seq'])
+          && request.resource.data.senderUid is string
+          && request.resource.data.senderName is string
+          && request.resource.data.ciphertext is string
+          && request.resource.data.ciphertext.size() < 1000000;
+        allow update: if request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['deleted','reactions','readers','edited','ciphertext','iv'])
+          && (resource.data.deleted != true);
+        allow delete: if false;
+      }
+
+      match /members/{uid} {
+        allow read: if true;
+        allow create, update: if request.resource.data.keys().hasOnly(['name','joinedAt','online','lastSeen','lastSpokeAt','avatarEmoji','avatarColor','role','kicked','kickedAt'])
+          && request.resource.data.name is string;
+        allow delete: if false;
+      }
+
+      match /typing/{uid} {
+        allow read, write: if true;
+      }
+
+      match /calls/{docId} {
+        allow read, write: if true;
+      }
+
+      match /calls/current/{subcol}/{docId} {
+        allow read, write: if true;
+      }
+
+      match /calls/current/p2p/{pairId}/{subcol}/{docId} {
+        allow read, write: if true;
+      }
+
+      match /invites/{token} {
+        allow read, write: if true;
+      }
+    }
+
+    match /users/{uid} {
+      allow read, write: if true;
+      match /tokens/{tokenId} { allow read, write: if true; }
+      match /devices/{deviceId} { allow read, write: if true; }
+    }
+
+    match /scheduled/{docId} {
+      allow read, write: if true;
+    }
+
+    // Deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
