@@ -1,4 +1,4 @@
-# Chatrix — Anonymous Encrypted Group Chat (PWA)
+# ChatNOW — Anonymous Encrypted Group Chat (PWA)
 
 Zero-login, real-time group chat with end-to-end-like encryption. No account creation needed — just pick a name and share a 4-digit room code. Works as a Progressive Web App (installable, offline shell, push notifications).
 
